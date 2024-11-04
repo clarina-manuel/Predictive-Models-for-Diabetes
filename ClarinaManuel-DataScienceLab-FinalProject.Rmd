@@ -1,0 +1,441 @@
+---
+title: "Clarina Manuel - Final Project"
+output:
+  html_document:
+    df_print: paged
+---
+
+My final project explores the "diabetes_prediction_dataset.csv" found on Kaggle. This dataset includes 100,000 observations and 9 features. I am investigating the relationship between 6 independent variables (gender, age, BMI, smoking history, HbA1c_level, and blood_glucose_level), and the dependent variable, diabetes (binary outcome). I will be using a decision tree (and, if necessary, a Random Forest) to solve this problem and to predict the status of diabetes in a patient. I will use performance metrics, a confusion matrix, and a k-fold cross-validation to assess the tree algorithm. 
+
+----------------------------------------------------------------------------------------------
+
+Imports:
+
+```{r}
+library("tidyverse")
+library("tree")
+library("ISLR")
+library("stringr")
+library("MASS")
+library("randomForest")
+library("gbm")
+```
+
+----------------------------------------------------------------------------------------------
+
+Loading the Dataset:
+
+```{r}
+data <- read.csv("diabetes_prediction_dataset.csv")
+summary(data) #summary statistics
+```
+
+
+----------------------------------------------------------------------------------------------
+
+Pre-Processing the Data:
+
+```{r}
+#Finding/Removing missing values
+sum(is.na(data))
+```
+```{r}
+#Cleaning Data -- Feature Engineering
+#I will be creating "new" features (with the correct data types for my model) from the existing attributes from this dataset
+
+#The attribute "smoking_history" contains the column values: "never," "No Info," "current," "former," "ever," and "not current"
+unique(data$smoking_history)
+
+#To make these categorical values usable for a decision tree, we must first convert them into factors
+data$smoking_history <- factor(data$smoking_history)
+
+#Factor Levels: current (1), ever (2), former (3), never (4), No Info (5), not current (6)
+levels(data$smoking_history)
+
+#Decision trees require numeric inputs, so, we must encode factor levels as integers
+data$smoking_history <- as.integer(data$smoking_history)
+print(data$smoking_history)
+
+#We must transform the attribute "Diabetes" and its data from integer to categorical 
+data$diabetes <- as.factor(data$diabetes)
+
+#The same applies for the "Gender" attribute. 
+data$gender <- ifelse(data$gender == "Male", 1, 0)
+data$gender <- as.factor(data$gender)
+
+#check:
+head(data)
+```
+```{r}
+#Identifying Outliers
+
+#Feature Selection: Extracting only the relevant attributes from this dataset
+diabetes_data <- data[, c("gender", "age", "smoking_history", "bmi", "HbA1c_level", "blood_glucose_level", "diabetes")]
+
+#Check and Removing Outliers
+#BMI
+boxplot(diabetes_data$bmi)
+
+z_scores <- scale(diabetes_data$bmi)
+bmi_outliers <- which(abs(z_scores) > 3)
+
+diabetes_data <- diabetes_data[-bmi_outliers, ]
+
+
+#HbA1c Levels
+boxplot(diabetes_data$HbA1c_level)
+
+z_scores <- scale(diabetes_data$HbA1c_level)
+hba1c_outliers <- which(abs(z_scores) > 3)
+
+diabetes_data <- diabetes_data[-hba1c_outliers, ]
+
+
+#Blood Glucose Levels
+boxplot(diabetes_data$blood_glucose_level)
+
+z_scores <- scale(diabetes_data$blood_glucose_level)
+glucose_outliers <- which(abs(z_scores) > 3)
+
+diabetes_data <- diabetes_data[-glucose_outliers, ]
+
+#Validate
+hist(diabetes_data$bmi)
+hist(diabetes_data$HbA1c_level)
+hist(diabetes_data$blood_glucose_level)
+```
+
+----------------------------------------------------------------------------------------------
+
+Exploratory Data Analysis:
+
+```{r}
+head(diabetes_data)
+str(diabetes_data)
+dim(diabetes_data)
+```
+```{r}
+#Correlation Matrix -- Multivariate EDA
+#This would help visualize and find relationships in the data.
+library(dplyr)
+library(corrplot)
+library(caret)
+
+diabetessubset <- diabetes_data %>% dplyr::select(gender, age, smoking_history, bmi, blood_glucose_level, HbA1c_level, diabetes)
+
+#Convert to numeric for correlation matrix
+diabetessubset$diabetes <- as.numeric(diabetessubset$diabetes)
+diabetessubset$gender <- as.numeric(diabetessubset$gender)
+
+cor_diabetes <- diabetessubset %>% dplyr::select(gender, age, smoking_history, bmi, blood_glucose_level, HbA1c_level, diabetes)
+
+correlation_matrixsubset <- cor(cor_diabetes)
+
+# Plot the correlation matrix as a heatmap
+corrplot(correlation_matrixsubset)
+
+#Now we can see that there is a positive correlation between Age and BMI (as age increases, BMI tends to increase as well). There is also a positive correlation between HbA1c levels and diabetes (as the HbA1c levels increase, the probability of having diabetes increases as well). Through this correlation matrix, I can see (in order) the factors which most affect if a person has diabetes or not (HbA1c levels, blood glucose levels, age, then BMI). 
+
+
+```
+```{r}
+#Exploring Relationships through Scatter Plots -- Univariate
+library(ggplot2)
+
+#HbA1c Levels
+ggplot(data = diabetes_data, aes(x = HbA1c_level, y = diabetes)) +
+  geom_point() +
+  labs(title = "Scatter plot of HbA1c_Levels vs. Diabetes", x = "HbA1c Level", y = "Diabetes") +
+  theme_minimal()
+
+#Density plot
+ggplot(data = diabetes_data, aes(x = HbA1c_level, fill = diabetes, group = diabetes)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density of HbA1c_level by Diabetes Status",
+       x = "HbA1c_level", y = "Density") +
+  scale_color_manual(values = c("blue", "red")) + 
+  theme_minimal()
+
+summary(diabetes_data$HbA1c_level)
+
+#From this, we learn that if HbA1c Levels are greater than 6, that patient has a high chance of having diabetes.
+```
+```{r}
+#Blood Glucose Levels
+ggplot(data = diabetes_data, aes(x = blood_glucose_level, y = diabetes)) +
+  geom_point() +
+  labs(title = "Scatter plot of Glucose Levels vs. Diabetes", x = "Glucose Level", y = "Diabetes") +
+  theme_minimal()
+  #scale_y_continuous(breaks = c(0, 1))
+
+#Density plot
+ggplot(data = diabetes_data, aes(x = blood_glucose_level, fill = diabetes, group = diabetes)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density of Glucose by Diabetes Status",
+       x = "Glucose", y = "Density") +
+  scale_color_manual(values = c("blue", "red")) + 
+  theme_minimal()
+
+summary(diabetes_data$blood_glucose_level)
+
+#From this, we learn that people with diabetes tend to have glucose levels above 125. However, based on this plot, if a patient's glucose levels are higher than 125, there is a 50/50 chance they have diabetes or not. However, if their glucose levels are above 200, there is a significant chance they have diabetes.
+```
+```{r}
+#Age
+ggplot(data = diabetes_data, aes(x = age, fill = diabetes, group = diabetes)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density of Age by Diabetes Status",
+       x = "Age", y = "Density") +
+  scale_color_manual(values = c("blue", "red")) + 
+  theme_minimal()
+
+summary(diabetes_data$age)
+
+#There seems to be a positive correlation between Age and Diabetes. As age increases, the possibility of a patient having diabetes also increases. 
+```
+
+```{r}
+#BMI
+ggplot(data = diabetes_data, aes(x = bmi, fill = diabetes, group = diabetes)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density of BMI by Diabetes Status",
+       x = "BMI", y = "Density") +
+  scale_color_manual(values = c("blue", "red")) + 
+  theme_minimal()
+
+summary(diabetes_data$bmi)
+
+#There is not much of a correlation between BMI and Diabetes. However, it is interesting to note that most patients with diabetes have a BMI between 25 and 30. 
+```
+
+----------------------------------------------------------------------------------------------
+
+Decision Tree:
+I will be using a decision tree to solve this problem and to predict the status of diabetes in a patient. 
+
+I chose this model because it can classify data into categories and it is very easy to interpret. In addition, decision trees can capture non-linear relationships between the features and the target variable, which is useful in this case with diabetes, where interactions between multiple features influences the outcome. For example, the effect of blood glucose levels on diabetes might depend on other factors like age or BMI, which a decision tree can capture easily.
+
+```{r}
+#Split the Data into Test-Train-Split
+set.seed(12345)
+
+train_index <- sample(1:nrow(diabetes_data), 0.7 * nrow(diabetes_data))
+train_data <- diabetes_data[train_index, ]
+test_data <- diabetes_data[-train_index, ]
+```
+
+```{r}
+#Creating the Tree Model
+library("tree")
+
+tree_model <- tree(diabetes ~., data = train_data)
+print(tree_model)
+
+summary(tree_model)
+
+plot(tree_model)
+text(tree_model, pretty = 0.5, cex = .5, digits = 1)
+```
+
+----------------------------------------------------------------------------------------------
+
+Evaluating the Decision Tree: Confusion Matrix + K-Fold Cross Validation
+
+```{r}
+library(tree)
+library(caret)
+
+#Evaluate Decision Tree:
+predictions <- predict(tree_model, test_data, type = "class")
+
+# Confusion matrix to evaluate predictions
+confusionMatrix(data=predictions, reference = test_data$diabetes)
+
+#Accuracy
+accuracy <- mean(predictions == test_data$diabetes)
+print(accuracy)
+
+#Evaluate the Confusion Matrix:
+#There are 27186 cases where the model correctly predicted the positive class (0-no diabetes). There are 809 cases where the model incorrectly predicted the negative class (1-diabetes) when the actual class was positive (0-no diabetes). There are NO cases where the model incorrectly predicted the negative class (1-diabetes) when the actual class was positive (0-no diabetes). Finally, there are 740 cases where the model correctly predicted the negative class (1-diabetes).
+
+#The accuracy of 0.9718 shows that the model is very good at predicting the data accurately. It's sensitivity of 1 suggests that the model identified all true positives correctly. However, it's specificity of 0.4777 indicates that the model correctly identified only 47.77% of the true negatives (of all the negative, no diabetes, cases it identified, only 47% are actually correct).
+```
+
+```{r}
+#K-Fold Cross Validation
+install.packages("caret")
+install.packages("rpart")
+
+library(caret)
+library(rpart)
+
+#10-fold cross-validation
+k <- 10
+
+#Specify parameters for cross-validation
+ctrl <- trainControl(method = "cv", number = k)
+
+# Fit a classification tree model using training data and recursive partitioning (splitting a dataset into smaller and smaller branches based on criteria--to achieve a tree)
+model <- train(diabetes ~ ., 
+               data = train_data, 
+               method = "rpart",
+               trControl = ctrl)
+
+# Cross-validation results
+print(model)
+model$results
+
+#Evaluation
+#This cross-validation process' results show that this model performs best (with the highest accuracy) with a smaller value of the complexity parameter (cp=0.0004293521), indicating that a more complex decision tree structure (with less pruning) fits this dataset better.
+
+```
+
+----------------------------------------------------------------------------------------------
+
+Testing Techniques to Improve the Model:
+
+```{r}
+#Improving/Tuning the Tree: Pruning
+set.seed(123)
+
+library(tree)
+library(caret)
+
+#Performs cross validation to find the best sub-tree with the least amount of mis-classification errors
+cv_tree <- cv.tree(tree_model, FUN = prune.misclass)
+cv_tree
+
+# Identify the best tree size based on cross-validation
+best_size <- cv_tree$size[which.min(cv_tree$dev)]
+best_size
+
+# Prune the tree to the best size
+pruned_tree <- prune.misclass(tree_model, best = 7)
+
+#Testing
+pruned_pred <- predict(pruned_tree, data = test_data, type = 'class')
+pruned_pred
+
+#Ensuring both vectors are of the same length
+length(pruned_pred)
+length(test_data$diabetes)
+
+shortened_pred <- pruned_pred[1:length(test_data$diabetes)]
+
+#Confusion Matrix + Evaluation
+confusionMatrix(data=shortened_pred, reference = test_data$diabetes)
+
+#Accuracy
+accuracy <- mean(shortened_pred == test_data$diabetes)
+print(accuracy)
+
+#Precision
+precision <- 26459/(26459 + 1514) #true positive / (true positive + false positive)
+precision
+
+#Recall
+recall <- 26459 / (26459 + 727) #true positive / (true positive + false negative)
+recall
+
+#Evaluation:
+#The pruning process appears to have been somewhat aggressive but overall beneficial, as it led to a reduction in the model's accuracy from 0.9718462 to 0.9220115 This decrease suggests that some predictive patterns in the training data were removed during pruning and reduced the model's ability to accurately distinguish between classes.
+
+#However, this model ability to correctly identify positive instances increased significantly (shown by higher precision: 0.9458764). It can also capture most of all the positive cases, better than it could before (higher recall; 0.971102 to 0.9458764)
+
+#This shows that the pruning tuned the model by balancing all the performance metrics. 
+
+#I will be now trying out a Random Forest model to see if the original tree model can be further improved.
+```
+
+----------------------------------------------------------------------------------------------
+
+Final Model Selection: A Classification Tree w/ Tuning
+
+```{r}
+#Classification Tree With Tuning
+#I will be using "rpart" to create this tree
+
+install.packages("rattle")
+
+library(rpart)
+library(rattle)
+
+#Best complexity parameter according to the k-folds cross validation
+best_cp <- 0.0004293521
+
+# Train the model with the best cp
+final_model <- rpart(diabetes ~ ., 
+               data = train_data, 
+               method = "class", 
+               control = rpart.control(cp = best_cp))
+
+#Visualize using the rattle library
+fancyRpartPlot(final_model)
+
+#Make a predictive model
+final_preds <- predict(final_model, newdata = test_data, type = "class")
+```
+
+```{r}
+#Evaluate performance metrics
+confusionMatrix(data=final_preds, reference = test_data$diabetes)
+
+#Accuracy
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+accuracy
+
+#Precision
+precision <- 27186/(27186 + 809) #true positive / (true positive + false positive)
+precision
+
+#Recall
+recall <- 27186 / (27186 + 0) #true positive / (true positive + false negative)
+recall
+
+#Evaluation of Model and Analysis of Dataset:
+#The high accuracy of 0.9718462 shows that the model performs well in making correct predictions. It's high precision of 0.971102 suggests that the model rarely predicts false positives (cases predicted as positive but are actually negative). This could indicate that when the model predicts a positive outcome, it is often incorrect. The model's high recall of 1 shows that the model has a high sensitivity to detect positive instances, and can correctly identify all the actual positive cases in the dataset.
+
+
+#Discussion of Final Model Assumptions:
+'''
+Assumption 1: There is no feature independence, and there are interactions between features
+Evaluation: This classification assumed that the features correlate with each other, and then assigned some importance for each features. For example, the effect of blood glucose levels on diabetes might depend on other factors like age or BMI -- the tree was able to take into account the correlation between these features while making decisions.
+
+Assumption 2: It can handle different feature types
+Evaluation: This classification tree was able to handle both numerical and categorical data, which was convenient because I did not need to make that many data transformations. This proves that this classification tree is flexible for different situations.
+
+Assumption 3: Non-linearity
+The classification tree did not assume that the features and the target variable had a linear relationship. Instead, it was able to handle the interactions between multiple features which are often non-linear (for example: blood_glucose_levels do not necessarily increase as age increases -- this could be a result of other external factors)
+'''
+
+```
+----------------------------------------------------------------------------------------------
+
+Additional Work: Testing out a Random Forest
+
+```{r}
+#Improving the Tree: Random Forest
+
+# Install and load required packages if not already installed
+install.packages("randomForest")
+library(randomForest)
+
+library(caret)
+
+#Fit random model
+random_forest <- randomForest(diabetes ~ ., data = train_data, ntree = 200)
+
+forest_preds <- predict(model, newdata = test_data)
+
+# Confusion matrix
+confusionMatrix(data=forest_preds, reference = test_data$diabetes)
+
+#Evaluate:
+#This random forest resulted in the same Confusion Matrix as a classification tree, with the same number of true/false positive and negative cases. 
+
+#It's accuracy of 0.9718 indicates that the model correctly predicted 97.18% of all cases. It's sensitivity of 1 suggests that the model identified all true positives correctly. However, it's specificity of 0.4777 indicates that the model correctly identified only 47.77% of the true negatives.
+
+#Overall, the model shows high accuracy and sensitivity but lower specificity, showing that it performs very well in identifying the positive class (0-no diabetes) but not as well in identifying the negative class (1-diabetes).
+
+
+```
