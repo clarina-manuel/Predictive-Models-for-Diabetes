@@ -1,0 +1,3 @@
+I explored the "diabetes_prediction_dataset.csv," which includes over 100,000 observations and 9 features. Using the R programming language, I investigated the relationship between 6 independent variables (gender, age, BMI, smoking history, HbA1c_level, and blood_glucose_level), and the dependent variable, diabetes (binary outcome). I used a decision tree and a Random Forest model to solve this problem and to predict the status of diabetes in a patient. I used performance metrics, a confusion matrix, and a k-fold cross-validation to assess the performance of the tree algorithm.
+
+To run this code, copy and paste the entire .rmd file (R-Markdown Document) into the RStudio IDE to view all the graphs and visual models included in this file.
